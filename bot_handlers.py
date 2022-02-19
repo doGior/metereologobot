@@ -1,230 +1,318 @@
 from datetime import datetime
 
 from telegram.ext import ConversationHandler
-from telegram import Update, InlineKeyboardMarkup, InlineKeyboardButton, ParseMode
+from telegram import Update, InlineKeyboardMarkup, InlineKeyboardButton
 from telegram.ext import CallbackContext
 import api_parser
+import strings
 
 openweather = api_parser.OpenWeather()
-curr_forecast_index = 0  # TODO salvarlo in user_data
-messages = []  # TODO salvarlo in user_data
-
-# TODO Refactor generale
-# TODO tradurre tutto in italiano
 
 
-def start(update: Update, context: CallbackContext):
-    keyboard = [[
-        InlineKeyboardButton("Condizioni attuali", callback_data='curr_con'),
-        InlineKeyboardButton("Previsioni", callback_data='forecast'),
-    ], [InlineKeyboardButton("Impostazioni", callback_data='preferences')]]
+def start(update: Update, context: CallbackContext) -> None:
+    """
+    Invio messaggio d'inizio
+    :param update: evento che ha fatto partire la funzione
+    :param context: oggetto con informazioni sul contesto (es: dati utente)
+    :return: None
+    """
+    # Elenco di pulsanti
+    tastiera = [[
+        InlineKeyboardButton(strings.plt_cond_att, callback_data=strings.cld_cond_attuali),
+        InlineKeyboardButton(strings.plt_previsioni, callback_data=strings.cld_previsioni)],
+        [InlineKeyboardButton(strings.plt_impostazioni, callback_data=strings.cld_impostazioni)]]
 
-    reply_markup = InlineKeyboardMarkup(keyboard)
+    # Serializzazione dei pulsanti
+    reply_markup = InlineKeyboardMarkup(tastiera)
+
+    # Set variabile utente
+    context.user_data[strings.usr_indice_giorni] = 0
+
+    # Invio messaggio
     context.bot.send_message(chat_id=update.effective_chat.id,
-                             text=f"Ciao @{update.effective_user.username}, come posso esserti utile?",
+                             text=strings.msg_start.format(username=update.effective_user.username),
                              reply_markup=reply_markup)
 
 
-def current_conditions(update: Update, context: CallbackContext):
+def condizioni_attuali(update: Update, context: CallbackContext) -> None:
+    """
+    Invio delle dati_meteo sulle condizioni meteo attuali
+    :param update: evento che ha fatto partire la funzione
+    :param context: oggetto con informazioni sul contesto (es: dati utente)
+    :return: None
+    """
     query = update.callback_query
-    query.answer()
-    keyboard = [[InlineKeyboardButton("◀", callback_data="back:to_start")]]
-    reply_markup = InlineKeyboardMarkup(keyboard)
+    tastiera = [[InlineKeyboardButton(strings.msg_icona_indietro,
+                                      callback_data=strings.cld_indietro + strings.cld_allinizio)]]
+    reply_markup = InlineKeyboardMarkup(tastiera)
 
-    data = context.user_data
-    unit = data.get("measure_unit", "metric")
-    temp_unit = "F" if unit == "imperial" else "C"
+    dati_utente = context.user_data
+    uni_misura = dati_utente.get(strings.usr_misura, strings.cld_metrico)
+    temp_unit = strings.msg_simb_fahrenheit if uni_misura == strings.cld_imperiale else strings.msg_simb_celsius
     try:
-        data: dict = context.user_data
-        lat = data["location_lat"]
-        lon = data["location_lon"]
-        unit = data.get("measure_unit", "metric")
-        name = data["name"]
-
-        message_dict = openweather.get_current_conditions(lat, lon, unit)
-        message = f"*{name.upper()}*\n\n" \
-                  f"{message_dict['weather'][0]['description'].capitalize()}" \
-                  f"\nTemperatura: {message_dict['main']['temp']}°{temp_unit}" \
-                  f"\nPercepita: {message_dict['main']['feels_like']}°{temp_unit}" \
-                  f"\nUmidità: {message_dict['main']['humidity']}%"
-        query.edit_message_text(text=message, parse_mode=ParseMode.MARKDOWN, reply_markup=reply_markup)
-
+        # Ottenimento dati salvati in precedenza
+        lat = dati_utente[strings.usr_lat]
+        lon = dati_utente[strings.usr_lon]
+        citta = dati_utente[strings.usr_citta]
     except KeyError:
-        query.edit_message_text(text="Località non ancora specificata", reply_markup=reply_markup)
+        # Segnalazione dati non salvati in precedenza
+        query.edit_message_text(text=strings.msg_non_loc, reply_markup=reply_markup)
+        return
+
+    dati_meteo = openweather.get_condizioni_attuali(lat, lon, uni_misura)
+    messaggio = strings.msg_cond_att.format(citta=citta.upper(),
+                                            tempo=dati_meteo['weather'][0]['description'].capitalize(),
+                                            temperatura=dati_meteo['main']['temp'],
+                                            temp_per=dati_meteo['main']['feels_like'],
+                                            temp_uni=temp_unit,
+                                            umidita=dati_meteo['main']['humidity'])
+
+    query.edit_message_text(text=messaggio, reply_markup=reply_markup)
 
 
-def forecast(update: Update, context: CallbackContext):
-    global curr_forecast_index
-    global messages
-
+def previsioni(update: Update, context: CallbackContext) -> None:
+    """
+    Invio delle informazioni relative al meteo dei prossimi giorni divise per pagina
+    :param update: evento che ha fatto partire la funzione
+    :param context: oggetto con informazioni sul contesto (es: dati utente)
+    :return: None
+    """
     query = update.callback_query
-    query.answer()
+    tastiera = [
+        [InlineKeyboardButton(strings.msg_icona_indietro,
+                              callback_data=strings.cld_indietro + strings.cld_dalle_previsioni),
+         InlineKeyboardButton(strings.msg_icona_avanti, callback_data=strings.cld_avanti)]]
 
-    keyboard = [[InlineKeyboardButton("◀", callback_data="back:from_forecast"),
-                 InlineKeyboardButton("▶", callback_data="next")]]
+    reply_markup = InlineKeyboardMarkup(tastiera)
 
-    reply_markup = InlineKeyboardMarkup(keyboard)
+    dati_utente = context.user_data
+    uni_misura = dati_utente.get(strings.usr_misura, strings.cld_metrico)
+    temp_unit = strings.msg_simb_fahrenheit if uni_misura == strings.cld_imperiale else strings.msg_simb_celsius
+    vel_unit = strings.msg_mph if uni_misura == strings.cld_imperiale else strings.msg_kmh
+
     try:
-        data: dict = context.user_data
-        lat = data["location_lat"]
-        lon = data["location_lon"]
-        unit = data.get("measure_unit", "metric")
-        name = data["name"]
-        temp_unit = "F" if unit == "imperial" else "C"
-        vel_unit = "mph" if unit == "imperial" else "km/h"
-
-        if len(messages) == 0:
-            messages = openweather.get_daily_forecast(lat, lon, unit)
-
+        lat = dati_utente[strings.usr_lat]
+        lon = dati_utente[strings.usr_lon]
+        citta = dati_utente[strings.usr_citta]
     except KeyError:
-        keyboard[0].pop(1)
-        query.edit_message_text(text="Località non ancora specificata", reply_markup=reply_markup)
+        tastiera[0].pop(1)
+        query.edit_message_text(text=strings.msg_non_loc, reply_markup=reply_markup)
         return
 
-    if curr_forecast_index >= len(messages) - 1:
-        keyboard[0].pop(1)
+    indice_previsioni = dati_utente.get(strings.usr_indice_giorni, 0)
+    dati_previsioni = dati_utente.get(strings.usr_previsioni, openweather.get_previsioni(lat, lon, uni_misura))
+    context.user_data[strings.usr_previsioni] = dati_previsioni
 
-    if curr_forecast_index < 0:
-        curr_forecast_index += 1
-        print("curr_index: ", curr_forecast_index)
-        return
-    elif curr_forecast_index >= len(messages):
-        curr_forecast_index -= 1
+    # Rimozione pulsante avanti al termine della lista
+    if indice_previsioni >= len(dati_previsioni) - 1:
+        tastiera[0].pop(1)
 
-        print("curr_index: ", curr_forecast_index)
-        return
-    else:
-        message = messages[curr_forecast_index]
+    dati_giorno = dati_previsioni[indice_previsioni]
 
-    wind = message["wind_speed"] if unit == "imperial" else message["wind_speed"] * 3.6
-    pretty_message = f"*{name.upper()}\n" \
-                     f"*{datetime.utcfromtimestamp(message['dt']).strftime('%d/%m/%Y')}\n\n" \
-                     f"🌄 *Alba*: {datetime.utcfromtimestamp(message['sunrise']).strftime('%H:%M')}\n" \
-                     f"🌇 *Tramonto*: {datetime.utcfromtimestamp(message['sunset']).strftime('%H:%M')}\n" \
-                     f"🌡 *Temperatura*:\n" \
-                     f"         *Min*: {message['temp']['min']}°{temp_unit}\n" \
-                     f"         *Max*: {message['temp']['max']}°{temp_unit}\n" \
-                     f"🍃 *Vento*: {round(wind, 3)}{vel_unit}\n" \
-                     f"⏱ *Pressione*: {message['pressure']}hPa\n" \
-                     f"💧 *Umidità*: {message['humidity']}%\n"
+    vento = dati_giorno["wind_speed"] if uni_misura == strings.cld_imperiale else dati_giorno["wind_speed"] * 3.6
+    messaggio_formattato = strings.msg_previsione. \
+        format(citta=citta.upper(),
+               data=datetime.utcfromtimestamp(dati_giorno['dt']).strftime('%d/%m/%Y'),
+               alba=datetime.utcfromtimestamp(dati_giorno['sunrise']).strftime('%H:%M'),
+               tramonto=datetime.utcfromtimestamp(dati_giorno['sunset']).strftime('%H:%M'),
+               temp_min=dati_giorno['temp']['min'],
+               temp_max=dati_giorno['temp']['max'],
+               temp_unit=temp_unit,
+               vento=round(vento, 3),
+               vel_unit=vel_unit,
+               pressione=dati_giorno['pressure'],
+               umidita=dati_giorno['humidity'])
+
     query.delete_message()
-    context.bot.send_message(chat_id=update.effective_chat.id, text=pretty_message,
-                             parse_mode=ParseMode.MARKDOWN, reply_markup=reply_markup)
-    # pprint(messages)
+    context.bot.send_message(chat_id=update.effective_chat.id, text=messaggio_formattato, reply_markup=reply_markup)
 
 
-def next_day(update: Update, context: CallbackContext):
-    global curr_forecast_index
-    curr_forecast_index += 1
-    forecast(update, context)
+def prossimo_giorno(update: Update, context: CallbackContext) -> None:
+    """
+    Prossima pagina delle previsioni
+    :param update: evento che ha fatto partire la funzione
+    :param context: oggetto con informazioni sul contesto (es: dati utente)
+    :return: None
+    """
+    dati_utente = context.user_data
+    indice_previsioni = dati_utente.get(strings.usr_indice_giorni, 0)
+    num_giorni_previsioni = dati_utente.get(strings.usr_previsioni, [])
+
+    # Controllo che l'indice non sia superiore al numero di elementi con i dati delle previsioni
+    if indice_previsioni >= len(num_giorni_previsioni) and indice_previsioni > 0:
+        return
+
+    indice_previsioni += 1
+    context.user_data[strings.usr_indice_giorni] = indice_previsioni
+    previsioni(update, context)
 
 
-def preferences(update: Update, context: CallbackContext):
+def impostazioni(update: Update, context: CallbackContext) -> None:
+    """
+    Invio del messaggio con le impostazioni
+    :param update: evento che ha fatto partire la funzione
+    :param context: oggetto con informazioni sul contesto (es: dati utente)
+    :return: None
+    """
+    tastiera = [[
+        InlineKeyboardButton(strings.plt_localita, callback_data=strings.cld_luogo),
+        InlineKeyboardButton(strings.plt_misura, callback_data=strings.cld_unita_misura)],
+        [InlineKeyboardButton(strings.msg_icona_indietro, callback_data=strings.cld_indietro + strings.cld_allinizio)]]
     query = update.callback_query
-    query.answer()
-    keyboard = [[
-        InlineKeyboardButton("🗺 Località", callback_data='location'),
-        InlineKeyboardButton("🌡 Unità di misura", callback_data='unit_select')],
-        [InlineKeyboardButton("◀", callback_data="back:to_start")]]
-    query.edit_message_text(text="Modifica le impostazioni",
-                            reply_markup=InlineKeyboardMarkup(keyboard))
+    query.edit_message_text(text=strings.msg_mod_imp,
+                            reply_markup=InlineKeyboardMarkup(tastiera))
 
 
-def present_measure_unit(update: Update, context: CallbackContext):
+def presentazione_unita_misura(update: Update, context: CallbackContext) -> None:
+    """
+    Invio del messaggio con le opzioni relative al sistema di misurazione
+    :param update: evento che ha fatto partire la funzione
+    :param context: oggetto con informazioni sul contesto (es: dati utente)
+    :return: None
+    """
+    tastiera = [[
+        InlineKeyboardButton(strings.plt_metrico, callback_data=strings.cld_sel_unita_misura+strings.cld_metrico),
+        InlineKeyboardButton(strings.plt_imperiale, callback_data=strings.cld_sel_unita_misura+strings.cld_imperiale)],
+        [InlineKeyboardButton(strings.msg_icona_indietro,
+                              callback_data=strings.cld_indietro + strings.cld_alle_impostazioni)]]
     query = update.callback_query
-    query.answer()
-    keyboard = [[
-        InlineKeyboardButton("Metrico", callback_data='unit:metric'),
-        InlineKeyboardButton("Imperiale", callback_data='unit:imperial')],
-        [InlineKeyboardButton("◀", callback_data="back:to_preferences")]]
-
-    query.edit_message_text(text="Seleziona il sistema di unità di misura che preferisci",
-                            reply_markup=InlineKeyboardMarkup(keyboard))
+    query.edit_message_text(text=strings.msg_sel_misura,
+                            reply_markup=InlineKeyboardMarkup(tastiera))
 
 
-def select_measure_unit(update: Update, context: CallbackContext):
+def selezione_unita_misura(update: Update, context: CallbackContext) -> None:
+    """
+    Conferma selezione sistema di misurazione e aggiornamento dati
+    :param update: evento che ha fatto partire la funzione
+    :param context: oggetto con informazioni sul contesto (es: dati utente)
+    :return: None
+    """
+    dati = update.callback_query.data
+    uni_misura = dati[dati.index(":") + 1:]
+    context.user_data[strings.usr_misura] = uni_misura
     query = update.callback_query
-    query.answer()
-    unit = update.callback_query.data[5:]
-    context.user_data["measure_unit"] = unit
-    query.edit_message_text(text="Opzione aggiornata")
+    query.edit_message_text(text=strings.msg_op_agg)
     start(update, context)
 
 
-def ask_for_location(update: Update, context: CallbackContext):
-    # Starting point
+def richiesta_localita(update: Update, context: CallbackContext) -> int:
+    """
+    Richiesta della località di cui sapere il meteo
+    (Punto di partenza del gestore della conversazione)
+    :param update: evento che ha fatto partire la funzione
+    :param context: oggetto con informazioni sul contesto (es: dati utente)
+    :return: None
+    """
+    tastiera = [[InlineKeyboardButton(strings.msg_icona_indietro,
+                                      callback_data=strings.cld_indietro_alle_impostazioni)]]
     query = update.callback_query
-    query.answer()
-    keyboard = [[InlineKeyboardButton("◀", callback_data="back_to_preferences")]]
-    query.edit_message_text(text="Di quale città vuoi sapere il meteo?",
-                            reply_markup=InlineKeyboardMarkup(keyboard))
+    query.edit_message_text(text=strings.msg_dom_citta,
+                            reply_markup=InlineKeyboardMarkup(tastiera))
     return 0
 
 
-def present_locations(update: Update, context: CallbackContext):
-    message = update.message.text
-    results = openweather.search_location(message)
-    keyboard = [InlineKeyboardButton(f"{i['name']}, {i['country']}",
-                                     callback_data=f"loc:{i['name']}|{i['lat']}:{i['lon']}") for i in results]
-    keyboard = [[i] for i in keyboard]
-    keyboard.append([InlineKeyboardButton("◀", callback_data="back_to_preferences")])
+def presentazione_localita(update: Update, context: CallbackContext) -> int:
+    """
+    Presentazione località trovate dall'API
+    (Stato 0 del gestore delle conversazioni)
+    :param update: evento che ha fatto partire la funzione
+    :param context: oggetto con informazioni sul contesto (es: dati utente)
+    :return: None
+    """
+    citta = update.message.text
+    risultati = openweather.cerca_luogo(citta)
+
+    tastiera = [InlineKeyboardButton(strings.plt_luogo.format(citta=i['name'], paese=i['country']),
+                                     callback_data=f"{strings.cld_luogo_presentato}{i['name']}|{i['lat']}:{i['lon']}")
+                for i in risultati]
+
+    tastiera = [[i] for i in tastiera]
+    tastiera.append([InlineKeyboardButton(strings.msg_icona_indietro,
+                                          callback_data=strings.cld_indietro_alle_impostazioni)])
     context.bot.send_message(chat_id=update.effective_chat.id,
-                             text="Seleziona la città",
-                             reply_markup=InlineKeyboardMarkup(keyboard))
+                             text=strings.msg_sel_citta,
+                             reply_markup=InlineKeyboardMarkup(tastiera))
     return 1
 
 
-def location_selected(update: Update, context: CallbackContext):
-    query = update.callback_query
-    query.answer()
+def conferma_selezione_localita(update: Update, context: CallbackContext) -> int:
+    """
+    Conferma della selezione della località e aggiornamento dei dati
+    (Stato 1 del gestore delle conversazioni)
+    :param update: evento che ha fatto partire la funzione
+    :param context: oggetto con informazioni sul contesto (es: dati utente)
+    :return: None
+    """
+    dati = update.callback_query.data
+    citta = dati[dati.index(":") + 1:dati.rindex("|")]
+    lat = dati[dati.rindex("|") + 1:dati.rindex(":")]
+    lon = dati[dati.rindex(":") + 1:]
 
-    data = update.callback_query.data
-    name = data[4:data.rindex("|")]
-    lat = data[data.rindex("|") + 1:data.rindex(":")]
-    lon = data[data.rindex(":") + 1:]
-    context.user_data["location_lat"] = lat
-    context.user_data["location_lon"] = lon
-    context.user_data["name"] = name
-    query.edit_message_text(text="Città selezionata")
+    context.user_data[strings.usr_lat] = lat
+    context.user_data[strings.usr_lon] = lon
+    context.user_data[strings.usr_citta] = citta
+
+    query = update.callback_query
+    query.edit_message_text(text=strings.msg_citta_selezionata)
 
     start(update, context)
 
+    # Fine conversazione
     return ConversationHandler.END
 
 
-def back(update: Update, context: CallbackContext):
+def indietro(update: Update, context: CallbackContext) -> None:
+    """
+    Implementazione del pulsante indietro nelle varie schermate
+    :param update: evento che ha fatto partire la funzione
+    :param context: oggetto con informazioni sul contesto (es: dati utente)
+    :return: None
+    """
     query = update.callback_query
-    query.answer()
 
-    data = query.data
-    data = data[data.index(":") + 1:]
+    dati = query.data
+    dati = dati[dati.index(":") + 1:]
 
-    if data == "to_start":
+    if dati == strings.cld_allinizio:  # Ritorno all'inizio
         query.delete_message()
         start(update, context)
-
-    elif data == "to_preferences":
-        return back_to_pref(update, context)
-
-    elif data == "from_forecast":
-        global curr_forecast_index
-        if curr_forecast_index == 0:
+    elif dati == strings.cld_alle_impostazioni:  # Ritorno alle impostazioni
+        indietro_alle_impostazioni(update, context)
+        return
+    elif dati == strings.cld_dalle_previsioni:  # Ritorno alla pagina precedente delle previsioni
+        indice_previsioni = context.user_data.get(strings.usr_indice_giorni, 0)
+        if indice_previsioni == 0:
             query.delete_message()
             start(update, context)
         else:
-            curr_forecast_index -= 1
-            forecast(update, context)
+            indice_previsioni -= 1
+            context.user_data[strings.usr_indice_giorni] = indice_previsioni
+            previsioni(update, context)
 
 
-def back_to_pref(update: Update, context: CallbackContext):
-    preferences(update, context)
+def indietro_alle_impostazioni(update: Update, context: CallbackContext) -> int:
+    """
+    Implementazione del tasto indietro nel gestore delle conversazioni
+    :param update: evento che ha fatto partire la funzione
+    :param context: oggetto con informazioni sul contesto (es: dati utente)
+    :return: None
+    """
+    impostazioni(update, context)
     return ConversationHandler.END
 
 
-def error(update: Update, context: CallbackContext):
+def error(update: Update, context: CallbackContext) -> int:
+    """
+    Avviso di errori
+    :param update: evento che ha fatto partire la funzione
+    :param context: oggetto con informazioni sul contesto (es: dati utente)
+    :return: None
+    """
+    update.callback_query.answer(strings.msg_errore, show_alert=True)
     context.bot.send_message(chat_id=update.effective_chat.id,
-                             text="Si è verificato un errore, si prega di provare di nuovo")
-    print(context.error)
+                             text=strings.msg_errore)
+    context.user_data[strings.usr_indice_giorni] = 0
     start(update, context)
-    context.bot.delete_message(update.message.message_id)
+    if update.message is not None:
+        context.bot.delete_message(update.message.message_id)
     return -1
