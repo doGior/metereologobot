@@ -101,6 +101,8 @@ def previsioni(update: Update, context: CallbackContext) -> None:
 
     indice_previsioni = dati_utente.get(strings.usr_indice_giorni, 0)
     dati_previsioni = dati_utente.get(strings.usr_previsioni, openweather.get_previsioni(lat, lon, uni_misura))
+    if datetime.utcfromtimestamp(dati_previsioni[0]['dt']) < datetime.today():
+        dati_previsioni = openweather.get_previsioni(lat, lon, uni_misura)
     context.user_data[strings.usr_previsioni] = dati_previsioni
 
     # Rimozione pulsante avanti al termine della lista
