@@ -99,12 +99,13 @@ def previsioni(update: Update, context: CallbackContext) -> None:
         query.edit_message_text(text=strings.msg_non_loc, reply_markup=reply_markup)
         return
 
-    indice_previsioni = dati_utente.get(strings.usr_indice_giorni, 0)
     dati_previsioni = dati_utente.get(strings.usr_previsioni, openweather.get_previsioni(lat, lon, uni_misura))
-    if datetime.utcfromtimestamp(dati_previsioni[0]['dt']) < datetime.today():
+    if datetime.utcfromtimestamp(dati_previsioni[0]['dt']).date() < datetime.today().date():
         dati_previsioni = openweather.get_previsioni(lat, lon, uni_misura)
+        context.user_data[strings.usr_indice_giorni] = 0
     context.user_data[strings.usr_previsioni] = dati_previsioni
 
+    indice_previsioni = dati_utente.get(strings.usr_indice_giorni, 0)
     # Rimozione pulsante avanti al termine della lista
     if indice_previsioni >= len(dati_previsioni) - 1:
         tastiera[0].pop(1)
