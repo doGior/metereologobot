@@ -5,7 +5,7 @@ from telegram.ext import Updater, CommandHandler, MessageHandler, ConversationHa
 
 class TelegramClient:
     """
-    Classe che ha lo scopo di semplificare la gestione del client
+    Singleton che ha lo scopo di semplificare la gestione del client
     """
     __istanza: "TelegramClient" = None  # Istanza della classe
 
